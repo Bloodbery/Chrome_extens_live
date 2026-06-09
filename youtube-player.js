@@ -3,9 +3,10 @@ const videoId = params.get("videoId");
 const soundEnabled = params.get("sound") === "1";
 const volume = Math.max(0, Math.min(100, Number(params.get("volume") ?? 50)));
 const quality = params.get("quality") || "auto";
-const fit = params.get("fit") === "contain" ? "contain" : "cover";
+const startTime = Math.max(0, Number(params.get("start") ?? 0));
 const root = document.querySelector("#player");
-root.classList.toggle("cover", fit === "cover");
+root.classList.add("cover");
+let player;
 
 function sendAvailableQualities(player) {
   const levels = player.getAvailableQualityLevels?.() ?? [];
@@ -17,7 +18,7 @@ if (!videoId || !/^[\w-]{6,}$/.test(videoId)) {
   root.textContent = "Не указан корректный videoId.";
 } else {
   window.onYouTubeIframeAPIReady = () => {
-    new YT.Player("player", {
+    player = new YT.Player("player", {
       videoId,
       width: "100%",
       height: "100%",
@@ -31,10 +32,12 @@ if (!videoId || !/^[\w-]{6,}$/.test(videoId)) {
         playlist: videoId,
         playsinline: 1,
         rel: 0,
-        modestbranding: 1
+        modestbranding: 1,
+        start: Math.floor(startTime)
       },
       events: {
         onReady(event) {
+          if (startTime > 0) event.target.seekTo(startTime, true);
           event.target.setVolume(volume);
           if (quality !== "auto") event.target.setPlaybackQuality(quality);
           if (soundEnabled && volume > 0) event.target.unMute();
@@ -55,3 +58,9 @@ if (!videoId || !/^[\w-]{6,}$/.test(videoId)) {
   api.src = "https://www.youtube.com/iframe_api";
   document.head.append(api);
 }
+
+window.addEventListener("message", (event) => {
+  if (event.data?.type !== "sync-seek" || !player?.seekTo) return;
+  const position = Number(event.data.position);
+  if (Number.isFinite(position) && position >= 0) player.seekTo(position, true);
+});
