@@ -7,6 +7,23 @@ const startTime = Math.max(0, Number(params.get("start") ?? 0));
 const root = document.querySelector("#player");
 root.classList.add("cover");
 let player;
+let pendingSound = { enabled: soundEnabled, volume };
+
+function applySound(settings = pendingSound) {
+  pendingSound = settings;
+  if (!player?.setVolume) return;
+  const nextVolume = Math.max(0, Math.min(100, Number(settings.volume) || 0));
+  player.setVolume(nextVolume);
+  if (settings.enabled && nextVolume > 0) player.unMute();
+  else player.mute();
+  player.playVideo?.();
+  window.parent.postMessage({
+    type: "youtube-sound-applied",
+    videoId,
+    volume: player.getVolume?.() ?? nextVolume,
+    muted: player.isMuted?.() ?? !settings.enabled
+  }, "*");
+}
 
 function sendAvailableQualities(player) {
   const levels = player.getAvailableQualityLevels?.() ?? [];
@@ -38,16 +55,15 @@ if (!videoId || !/^[\w-]{6,}$/.test(videoId)) {
       events: {
         onReady(event) {
           if (startTime > 0) event.target.seekTo(startTime, true);
-          event.target.setVolume(volume);
           if (quality !== "auto") event.target.setPlaybackQuality(quality);
-          if (soundEnabled && volume > 0) event.target.unMute();
-          else event.target.mute();
-          event.target.playVideo();
+          applySound();
+          window.parent.postMessage({ type: "youtube-ready", videoId }, "*");
         },
         onStateChange(event) {
           if (event.data === YT.PlayerState.PLAYING) {
             if (quality !== "auto") event.target.setPlaybackQuality(quality);
             sendAvailableQualities(event.target);
+            window.parent.postMessage({ type: "youtube-playing", videoId }, "*");
           }
         }
       }
@@ -56,11 +72,31 @@ if (!videoId || !/^[\w-]{6,}$/.test(videoId)) {
 
   const api = document.createElement("script");
   api.src = "https://www.youtube.com/iframe_api";
+  api.addEventListener("error", () => {
+    window.parent.postMessage({ type: "youtube-unavailable", videoId }, "*");
+  });
   document.head.append(api);
 }
 
 window.addEventListener("message", (event) => {
-  if (event.data?.type !== "sync-seek" || !player?.seekTo) return;
-  const position = Number(event.data.position);
-  if (Number.isFinite(position) && position >= 0) player.seekTo(position, true);
+  if (!player) return;
+  if (event.data?.type === "request-playback-status") {
+    const state = player.getPlayerState?.();
+    if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING || state === YT.PlayerState.CUED) {
+      window.parent.postMessage({ type: "youtube-ready", videoId }, "*");
+    }
+  }
+  if (event.data?.type === "sync-seek" && player.seekTo && player.getCurrentTime) {
+    const position = Number(event.data.position);
+    const currentTime = player.getCurrentTime();
+    if (Number.isFinite(position) && position >= 0 && Math.abs(currentTime - position) > 10) {
+      player.seekTo(position, true);
+    }
+  }
+  if (event.data?.type === "set-sound") {
+    applySound({
+      enabled: Boolean(event.data.enabled),
+      volume: Number(event.data.volume)
+    });
+  }
 });
